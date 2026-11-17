@@ -242,14 +242,16 @@ internal sealed class Droplet
                 float stretch = Stretch;
 
                 // Bigger drop (22→34 DIP), teardrop elongation
-                float dia   = Lerp(LiquidLook.DropDiaMin, LiquidLook.DropDiaMax, s);
+                // When s = 0 (low reach or hidden), dia = 0 so no body is drawn
+                float maxDia = Lerp(LiquidLook.DropDiaMin, LiquidLook.DropDiaMax, s);
+                float dia   = maxDia * s;
                 float k     = 1f + LiquidLook.DropElongK * stretch;
                 float dropH = dia * MathF.Sqrt(k);
                 float dropW = dia / MathF.Sqrt(k);
 
                 float tip = Lerp(14f * Smooth(0f, 0.6f, xv), 60f, s);  // lower tip for bigger drop
                 X.T   = Cx + _sway.V * s;
-                Y.T   = tip - dropH * 0.5f;
+                Y.T   = s > 0.001f ? tip - dropH * 0.5f : -14f;
                 Wd.T  = dropW;
                 Ht.T  = dropH;
                 Rad.T = dropW * 0.5f;
