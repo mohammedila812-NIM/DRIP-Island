@@ -35,6 +35,3 @@ snapshots/
 test_snapshots/
 ci_snapshots/
 latest-build/
-
-publish_fix/
-publish_phase1/

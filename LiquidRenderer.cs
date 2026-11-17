@@ -103,14 +103,6 @@ internal sealed class LiquidRenderer : IDisposable
     // ------------------------------------------------------------------ render
     public void Render(SKCanvas target, SKImageInfo info, float scale, Droplet d)
     {
-        // When the island is completely hidden, do not draw anything to ensure zero leakage below y=0
-        if (d.Phase == Phase.Hidden && d.Reach.V <= 0.01f && d.WdDraw <= 1f)
-        {
-            target.ResetMatrix();
-            target.Clear(SKColors.Transparent);
-            return;
-        }
-
         int padPx = (int)MathF.Ceiling(Pad * scale);
         int h = info.Height + padPx;
         if (_surface == null || _sw != info.Width || _sh != h)
@@ -169,23 +161,15 @@ internal sealed class LiquidRenderer : IDisposable
     {
         float x = Math.Clamp(d.Reach.V, -0.15f, 1.15f);
 
-        // 1. Screen-edge strip (liquid reservoir above y=0).
-        // Sits at y <= -14 DIPs so its blurred edge never leaks below y=0 on its own.
-        c.DrawRect(SKRect.Create(-200f, -Pad - 10f, Droplet.W + 400f, Pad - 4f), paint);
+        // 1. Screen-edge strip (liquid reservoir above y=0)
+        c.DrawRect(SKRect.Create(-200f, -Pad - 10f, Droplet.W + 400f, Pad + 3f), paint);
 
-        // 2. Reservoir bulge — emerges only as Reach grows
-        float rSmooth = Droplet.Smooth(0.04f, 0.75f, x);
-        float resBottom = -14f;
-        if (rSmooth > 0.001f)
-        {
-            float depth = LiquidLook.ResDepthMax * rSmooth;
-            float rx = Droplet.Lerp(LiquidLook.ResRxMin, LiquidLook.ResRxMax,
-                                    Droplet.Smooth(0.3f, 1f, x));
-            resBottom = -14f + (14f + depth) * rSmooth;
-            float ry = 6f + depth * 0.5f;
-            float cy = resBottom - ry;
-            c.DrawOval(Droplet.Cx, cy, rx, ry, paint);
-        }
+        // 2. Reservoir bulge — wider and deeper than before
+        float rSmooth  = Droplet.Smooth(0f, 0.70f, x);
+        float depth    = LiquidLook.ResDepthMax * rSmooth;
+        float rx       = Droplet.Lerp(LiquidLook.ResRxMin, LiquidLook.ResRxMax,
+                             Droplet.Smooth(0.3f, 1f, x));
+        c.DrawOval(Droplet.Cx, LiquidLook.ResCy, rx, 4f + depth, paint);
 
         // 3. Body (drop → pill → panel)
         float bw = MathF.Max(0f, d.WdDraw);
@@ -206,7 +190,7 @@ internal sealed class LiquidRenderer : IDisposable
         float rMin     = Droplet.Lerp(LiquidLook.NeckRMinLo, LiquidLook.NeckRMinHi, stretch);
         rMin           = MathF.Max(rMin, LiquidLook.NeckRMinClamp);
 
-        float ay = resBottom - 2f; // neck starts near bottom of reservoir
+        float ay = LiquidLook.ResCy + 4f; // neck starts at bottom of reservoir
         float hx = d.X.V, hy = d.Y.V - bh * 0.5f;  // neck ends at top of drop body
         float len = MathF.Sqrt((hx - Droplet.Cx) * (hx - Droplet.Cx) + (hy - ay) * (hy - ay));
         if (len < 1f) return;
