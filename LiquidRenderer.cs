@@ -4,42 +4,103 @@ using SkiaSharp;
 namespace IslandWin;
 
 /// <summary>
+/// All tunable liquid-look constants live here.
+/// Phase 3 will migrate these into AppSettings/Tuning.
+/// </summary>
+internal static class LiquidLook
+{
+    // ---- blur / field ----
+    public const float SigmaMin   = 6.0f;   // blur at zero stretch
+    public const float SigmaMax   = 8.0f;   // blur at full stretch
+    public const float SigmaStep  = 0.5f;   // quantisation step for filter caching
+    public const float Threshold  = 0.50f;  // alpha threshold for the black island
+    public const float FieldScale = 1.0f;   // keep full-res (half-res path noted in plan, left for Phase 3)
+
+    // ---- reservoir ----
+    public const float ResRxMin   = 40f;    // reservoir half-width at Reach=0
+    public const float ResRxMax   = 70f;    // reservoir half-width at Reach=1
+    public const float ResDepthMax= 24f;    // how far the reservoir bulges below the edge
+    public const float ResCy      = -6f;    // y-centre of reservoir oval
+
+    // ---- neck profile  r(f) = rMin + (rBase-rMin)*(1-f)^p ----
+    public const float NeckRBaseMin = 18f;  // radius at screen edge, Reach=0
+    public const float NeckRBaseMax = 34f;  // radius at screen edge, Reach=1
+    public const float NeckRMinLo   = 11f;  // thinnest waist, low stretch
+    public const float NeckRMinHi   = 3.5f; // thinnest waist, full stretch
+    public const float NeckP        = 2.6f; // profile exponent
+    public const float NeckStep     = 2.5f; // sample spacing in DIPs (≤3 as required)
+    public const float NeckBlurComp = 0.35f;// radius += sigma*comp for thin parts
+    public const float NeckRMinClamp= 2.5f; // hard minimum radius
+
+    // ---- drop ----
+    public const float DropDiaMin   = 22f;  // diameter at zero reach (original)
+    public const float DropDiaMax   = 34f;  // diameter at full reach
+    public const float DropElongK   = 0.35f;// elongation: k = 1 + DropElongK * stretch
+
+    // ---- pinch-off ----
+    public const float PinchWindow  = 0.12f;// seconds before Detach where pinch starts
+    public const float PinchF       = 0.75f;// fractional position along neck that collapses
+    public const float PinchRMin    = 1.0f; // neck radius at pinch point
+    public const float RecoilKick   = -40f; // velocity added to Reach at Detach (retract stub)
+
+    // ---- satellite bead ----
+    public const bool  Satellite    = true;
+    public const float SatRadMin    = 3f;
+    public const float SatRadMax    = 5f;
+    public const float SatGravity   = 280f; // pixels/s² downward
+
+    // ---- rim ----
+    public const float RimSigmaX   = 0.8f;
+    public const float RimSigmaY   = 0.8f;
+    public const byte  RimAlpha    = 50;
+}
+
+public enum RimMode { Off, Subtle, Strong }
+
+/// <summary>
 /// Draws the island as a metaball field: shapes are drawn, blurred, then alpha-thresholded.
-/// Where two shapes come close, their blurred alphas add up past the threshold and they
-/// fuse into one surface - which is what gives the neck, the fillets against the screen edge
-/// and the snap when the drop lets go.
-///
-/// Rendering happens on an off-screen surface that has extra padding ABOVE the screen edge,
-/// so the "edge" can be modelled as a strip of liquid that the bulge merges into.
+/// Phase 1: wider meniscus, flared neck, variable sigma, rim removed by default.
 /// </summary>
 internal sealed class LiquidRenderer : IDisposable
 {
-    const float Pad = 48f;       // DIPs of padding above y = 0
-    const float Sigma = 4.5f;    // blur radius of the metaball field (smaller = tighter, thinner necks)
+    const float Pad = 60f;   // DIPs of padding above y=0 (increased for wider reservoir)
+
+    // Filter cache keyed by quantised sigma (int = sigma/SigmaStep)
+    readonly System.Collections.Generic.Dictionary<int, SKImageFilter> _filterCache = new();
+
+    readonly SKPaint _shape = new() { IsAntialias = true, Style = SKPaintStyle.Fill };
 
     SKSurface _surface;
     int _sw, _sh;
-    readonly SKImageFilter _mainFx, _rimFx;
-    readonly SKPaint _shape = new() { IsAntialias = true, Style = SKPaintStyle.Fill };
 
-    public LiquidRenderer()
+    public static RimMode Rim { get; set; } = RimMode.Off;
+
+    // ------------------------------------------------------------------ filter cache
+    SKImageFilter GetMainFilter(float sigma)
     {
-        _mainFx = SKImageFilter.CreateColorFilter(Threshold(0.50f), SKImageFilter.CreateBlur(Sigma, Sigma));
-        _rimFx  = SKImageFilter.CreateColorFilter(Threshold(0.38f), SKImageFilter.CreateBlur(Sigma, Sigma));
+        int key = (int)MathF.Round(sigma / LiquidLook.SigmaStep);
+        if (!_filterCache.TryGetValue(key, out var fx))
+        {
+            float s = key * LiquidLook.SigmaStep;
+            fx = SKImageFilter.CreateColorFilter(Threshold(LiquidLook.Threshold),
+                     SKImageFilter.CreateBlur(s, s));
+            _filterCache[key] = fx;
+        }
+        return fx;
     }
 
-    /// <summary>Alpha-only lookup table: a steep ramp around the threshold.</summary>
     static SKColorFilter Threshold(float t)
     {
         var a = new byte[256];
         for (int i = 0; i < 256; i++)
         {
-            float v = (i / 255f - t) * 10f + 0.5f;
+            float v = (i / 255f - t) * 12f + 0.5f;   // slightly steeper ramp for crisper edge
             a[i] = (byte)(Math.Clamp(v, 0f, 1f) * 255f);
         }
         return SKColorFilter.CreateTable(a, null, null, null);
     }
 
+    // ------------------------------------------------------------------ render
     public void Render(SKCanvas target, SKImageInfo info, float scale, Droplet d)
     {
         int padPx = (int)MathF.Ceiling(Pad * scale);
@@ -57,8 +118,35 @@ internal sealed class LiquidRenderer : IDisposable
         c.Translate(0, padPx);
         c.Scale(scale);
 
-        Pass(c, d, _rimFx, 70, SKColors.White);     // faint 1px rim so the island reads on dark wallpapers
-        Pass(c, d, _mainFx, 255, SKColors.Black);   // the island itself, pure black like Apple's
+        float stretch = d.Stretch;
+        float sigma   = LiquidLook.SigmaMin + (LiquidLook.SigmaMax - LiquidLook.SigmaMin) * stretch;
+        var   mainFx  = GetMainFilter(sigma);
+
+        // Optional rim: a subtly offset white copy behind the black island
+        if (Rim != RimMode.Off)
+        {
+            byte rimAlpha = Rim == RimMode.Strong ? (byte)80 : LiquidLook.RimAlpha;
+            var rimFilter = SKImageFilter.CreateColorFilter(
+                Threshold(LiquidLook.Threshold - 0.04f),
+                SKImageFilter.CreateBlur(sigma, sigma));
+            using var rimLayer = new SKPaint
+            {
+                ImageFilter = rimFilter,
+                Color = new SKColor(255, 255, 255, rimAlpha)
+            };
+            c.SaveLayer(rimLayer);
+            _shape.Color = SKColors.White;
+            DrawShapes(c, d, _shape, sigma);
+            c.Restore();
+            rimFilter.Dispose();
+        }
+
+        // Main black island
+        using var mainLayer = new SKPaint { ImageFilter = mainFx, Color = new SKColor(255, 255, 255, 255) };
+        c.SaveLayer(mainLayer);
+        _shape.Color = SKColors.Black;
+        DrawShapes(c, d, _shape, sigma);
+        c.Restore();
 
         c.Restore();
 
@@ -68,60 +156,92 @@ internal sealed class LiquidRenderer : IDisposable
         target.DrawImage(img, 0, -padPx);
     }
 
-    void Pass(SKCanvas c, Droplet d, SKImageFilter fx, byte layerAlpha, SKColor color)
+    // ------------------------------------------------------------------ shapes
+    static void DrawShapes(SKCanvas c, Droplet d, SKPaint paint, float sigma)
     {
-        using var layer = new SKPaint { ImageFilter = fx, Color = new SKColor(255, 255, 255, layerAlpha) };
-        c.SaveLayer(layer);
-        _shape.Color = color;
-        DrawShapes(c, d, _shape);
-        c.Restore();
-    }
-
-    static void DrawShapes(SKCanvas c, Droplet d, SKPaint paint)
-    {
-        // 1. The screen edge as a strip of liquid (its lower edge sits just above the visible area).
-        c.DrawRect(SKRect.Create(-150f, -Pad - 10f, Droplet.W + 300f, Pad + 3f), paint);
-
-        // 2. The reservoir: the bulge that is pulled out of the edge.
         float x = Math.Clamp(d.Reach.V, -0.15f, 1.15f);
-        float depth = 17f * Droplet.Smooth(0f, 0.65f, x);
-        float rx = Droplet.Lerp(40f, 22f, Droplet.Smooth(0.45f, 1f, x));
-        c.DrawOval(Droplet.Cx, -7f, rx, 3f + depth, paint);
 
-        // 3. The body (drop -> pill -> panel) and the neck holding it to the edge.
-        float bw = MathF.Max(0f, d.Wd.V), bh = MathF.Max(0f, d.Ht.V);
+        // 1. Screen-edge strip (liquid reservoir above y=0)
+        c.DrawRect(SKRect.Create(-200f, -Pad - 10f, Droplet.W + 400f, Pad + 3f), paint);
+
+        // 2. Reservoir bulge — wider and deeper than before
+        float rSmooth  = Droplet.Smooth(0f, 0.70f, x);
+        float depth    = LiquidLook.ResDepthMax * rSmooth;
+        float rx       = Droplet.Lerp(LiquidLook.ResRxMin, LiquidLook.ResRxMax,
+                             Droplet.Smooth(0.3f, 1f, x));
+        c.DrawOval(Droplet.Cx, LiquidLook.ResCy, rx, 4f + depth, paint);
+
+        // 3. Body (drop → pill → panel)
+        float bw = MathF.Max(0f, d.WdDraw);
+        float bh = MathF.Max(0f, d.HtDraw);
         if (bw < 1f || bh < 1f) return;
 
         float corner = MathF.Min(MathF.Max(d.Rad.V, 0f), MathF.Min(bw, bh) * 0.5f);
-        c.DrawRoundRect(SKRect.Create(d.X.V - bw * 0.5f, d.Y.V - bh * 0.5f, bw, bh), corner, corner, paint);
+        c.DrawRoundRect(SKRect.Create(d.X.V - bw * 0.5f, d.Y.V - bh * 0.5f, bw, bh),
+                        corner, corner, paint);
 
         float tether = d.Tether.V;
-        if (tether <= 0.08f) return;
+        if (tether <= 0.06f) return;
 
-        float nr = 7f * tether
-                 * (1f - 0.45f * Droplet.Smooth(0.5f, 1f, MathF.Max(x, 0f)))   // neck thins as it stretches
-                 * Droplet.Smooth(3f, 12f, MathF.Min(bw, bh))                   // no neck without a head
-                 * Droplet.Smooth(2f, 16f, d.Y.V);                              // neck dissolves into the edge
-        if (nr < 1f) return;
+        // 4. Flared, tapered neck profile
+        // rBase (at screen edge) and rMin (at drop) driven by stretch
+        float stretch  = d.Stretch;
+        float rBase    = Droplet.Lerp(LiquidLook.NeckRBaseMin, LiquidLook.NeckRBaseMax, x);
+        float rMin     = Droplet.Lerp(LiquidLook.NeckRMinLo, LiquidLook.NeckRMinHi, stretch);
+        rMin           = MathF.Max(rMin, LiquidLook.NeckRMinClamp);
 
-        float ay = -3f, hx = d.X.V, hy = d.Y.V;
+        float ay = LiquidLook.ResCy + 4f; // neck starts at bottom of reservoir
+        float hx = d.X.V, hy = d.Y.V - bh * 0.5f;  // neck ends at top of drop body
         float len = MathF.Sqrt((hx - Droplet.Cx) * (hx - Droplet.Cx) + (hy - ay) * (hy - ay));
-        int n = Math.Clamp((int)(len / 4f), 3, 24);
+        if (len < 1f) return;
+
+        // pinch factor: near Detach, collapse neck at f≈PinchF
+        float pinchFactor = d.PinchFactor;  // 0=no pinch, 1=fully pinched
+
+        int n = Math.Clamp((int)MathF.Ceiling(len / LiquidLook.NeckStep), 2, 60);
         for (int i = 0; i <= n; i++)
         {
-            float f = i / (float)n;
-            float px = Droplet.Cx + (hx - Droplet.Cx) * f * f;     // bends toward the head
+            float f  = i / (float)n;
+            float px = Droplet.Cx + (hx - Droplet.Cx) * f * f;   // quadratic bend
             float py = ay + (hy - ay) * f;
-            float waist = 0.85f + 0.30f * (2f * f - 1f) * (2f * f - 1f);
-            c.DrawCircle(px, py, nr * waist, paint);
+
+            // Profile: r(f) = rMin + (rBase - rMin) * (1-f)^p
+            float profile = rMin + (rBase - rMin) * MathF.Pow(1f - f, LiquidLook.NeckP);
+            profile = profile * tether;
+
+            // Blur compensation: thin parts shrink more under blur, so inflate slightly
+            float comp = sigma * LiquidLook.NeckBlurComp * (1f - f);
+            profile += comp;
+            profile = MathF.Max(profile, LiquidLook.NeckRMinClamp);
+
+            // Apply pinch collapse at f≈PinchF
+            if (pinchFactor > 0f)
+            {
+                float pinchDist = MathF.Abs(f - LiquidLook.PinchF);
+                float pinchLocal = MathF.Max(0f, 1f - pinchDist * 8f);  // narrow bell around pinchF
+                profile = Droplet.Lerp(profile, LiquidLook.PinchRMin, pinchFactor * pinchLocal);
+            }
+
+            if (profile < 0.5f) continue;
+            c.DrawCircle(px, py, profile, paint);
+        }
+
+        // 5. Satellite bead (if active)
+        if (LiquidLook.Satellite && d.SatActive)
+        {
+            float sr = d.SatRad;
+            if (sr > 0.5f)
+                c.DrawCircle(d.SatX, d.SatY, sr + sigma * 0.2f, paint);
         }
     }
 
+    // ------------------------------------------------------------------ IDisposable
     public void Dispose()
     {
         _surface?.Dispose();
-        _mainFx.Dispose();
-        _rimFx.Dispose();
         _shape.Dispose();
+        foreach (var fx in _filterCache.Values)
+            fx.Dispose();
+        _filterCache.Clear();
     }
 }
