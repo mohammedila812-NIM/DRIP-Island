@@ -1,5 +1,6 @@
 using System;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
 using Microsoft.Win32;
 
@@ -10,8 +11,49 @@ public partial class App : Application
     Mutex _mutex;
     System.Windows.Forms.NotifyIcon _tray;
 
+    public App()
+    {
+        AppDomain.CurrentDomain.UnhandledException += (s, e) =>
+            Log.Error("AppDomain.UnhandledException", e.ExceptionObject as Exception);
+
+        DispatcherUnhandledException += (s, e) =>
+        {
+            Log.Error("DispatcherUnhandledException", e.Exception);
+            e.Handled = true;
+        };
+
+        TaskScheduler.UnobservedTaskException += (s, e) =>
+        {
+            Log.Error("TaskScheduler.UnobservedTaskException", e.Exception);
+            e.SetObserved();
+        };
+    }
+
     void OnStartup(object sender, StartupEventArgs e)
     {
+        Log.Info("IslandWin starting");
+
+        for (int i = 0; i < e.Args.Length; i++)
+        {
+            if (e.Args[i].Equals("--snapshot", StringComparison.OrdinalIgnoreCase))
+            {
+                string outDir = (i + 1 < e.Args.Length) ? e.Args[i + 1] : "snapshots";
+                try
+                {
+                    Snapshot.Run(outDir);
+                    Environment.ExitCode = 0;
+                    Shutdown(0);
+                }
+                catch (Exception ex)
+                {
+                    Log.Error("Snapshot execution failed", ex);
+                    Environment.ExitCode = 1;
+                    Shutdown(1);
+                }
+                return;
+            }
+        }
+
         _mutex = new Mutex(true, "IslandWin.SingleInstance", out bool first);
         if (!first) { Shutdown(); return; }
 

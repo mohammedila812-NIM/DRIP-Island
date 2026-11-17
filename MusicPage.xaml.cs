@@ -42,7 +42,11 @@ public partial class MusicPage : UserControl
             _mgr.CurrentSessionChanged += (_, _) => Dispatcher.BeginInvoke(new Action(Attach));
             Attach();
         }
-        catch { Clear(); }
+        catch (Exception ex)
+        {
+            Log.Error("MusicPage.Init", ex);
+            Clear();
+        }
     }
 
     void Attach()
@@ -91,7 +95,10 @@ public partial class MusicPage : UserControl
             ArtistText.Text = string.IsNullOrWhiteSpace(props.Artist) ? props.AlbumTitle : props.Artist;
             await LoadArt(props.Thumbnail);
         }
-        catch { }
+        catch (Exception ex)
+        {
+            Log.Error("MusicPage.RefreshProps", ex);
+        }
     }
 
     async Task LoadArt(IRandomAccessStreamReference thumb)
@@ -114,7 +121,11 @@ public partial class MusicPage : UserControl
             bmp.Freeze();
             Art.Background = new ImageBrush(bmp) { Stretch = Stretch.UniformToFill };
         }
-        catch { Art.Background = fallback; }
+        catch (Exception ex)
+        {
+            Log.Error("MusicPage.LoadArt", ex);
+            Art.Background = fallback;
+        }
     }
 
     void RefreshPlayback()
@@ -147,9 +158,23 @@ public partial class MusicPage : UserControl
         DurText.Text = Mmss(total);
     }
 
-    async void OnPlayPause(object s, RoutedEventArgs e) { try { if (_s != null) await _s.TryTogglePlayPauseAsync(); } catch { } }
-    async void OnNext(object s, RoutedEventArgs e)      { try { if (_s != null) await _s.TrySkipNextAsync(); } catch { } }
-    async void OnPrev(object s, RoutedEventArgs e)      { try { if (_s != null) await _s.TrySkipPreviousAsync(); } catch { } }
+    async void OnPlayPause(object s, RoutedEventArgs e)
+    {
+        try { if (_s != null) await _s.TryTogglePlayPauseAsync(); }
+        catch (Exception ex) { Log.Error("MusicPage.OnPlayPause", ex); }
+    }
+
+    async void OnNext(object s, RoutedEventArgs e)
+    {
+        try { if (_s != null) await _s.TrySkipNextAsync(); }
+        catch (Exception ex) { Log.Error("MusicPage.OnNext", ex); }
+    }
+
+    async void OnPrev(object s, RoutedEventArgs e)
+    {
+        try { if (_s != null) await _s.TrySkipPreviousAsync(); }
+        catch (Exception ex) { Log.Error("MusicPage.OnPrev", ex); }
+    }
 
     async void OnSeek(object s, MouseButtonEventArgs e)
     {
@@ -157,6 +182,13 @@ public partial class MusicPage : UserControl
         var total = _end - _start;
         if (total <= TimeSpan.Zero) return;
         double f = Math.Clamp(e.GetPosition(Track).X / Track.ActualWidth, 0.0, 1.0);
-        try { await _s.TryChangePlaybackPositionAsync((_start + TimeSpan.FromSeconds(total.TotalSeconds * f)).Ticks); } catch { }
+        try
+        {
+            await _s.TryChangePlaybackPositionAsync((_start + TimeSpan.FromSeconds(total.TotalSeconds * f)).Ticks);
+        }
+        catch (Exception ex)
+        {
+            Log.Error("MusicPage.OnSeek", ex);
+        }
     }
 }

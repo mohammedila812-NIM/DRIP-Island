@@ -46,7 +46,10 @@ public static class Store
             if (File.Exists(FilePath))
                 return JsonSerializer.Deserialize<StoreData>(File.ReadAllText(FilePath)) ?? new StoreData();
         }
-        catch { }
+        catch (Exception ex)
+        {
+            Log.Error("Store.Load", ex);
+        }
         return new StoreData();
     }
 
@@ -57,6 +60,9 @@ public static class Store
             Directory.CreateDirectory(Path.GetDirectoryName(FilePath));
             File.WriteAllText(FilePath, JsonSerializer.Serialize(data));
         }
-        catch { }
+        catch (Exception ex)
+        {
+            Log.Error("Store.Save", ex);
+        }
     }
 }

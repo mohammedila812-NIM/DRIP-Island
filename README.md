@@ -30,6 +30,8 @@ Single file for daily use:
 | `ClockPage.*` | Clock, stopwatch, timer, alarm, reminder. State saved to `%AppData%\IslandWin\state.json`. |
 | `MusicPage.*` | Windows media session (SMTC): title, artist, artwork, progress, seek, transport. |
 | `App.*` | Single instance, tray icon, autostart, shared Apple-style control styles. |
+| `Log.cs` | Thread-safe rolling logger (%AppData%\IslandWin\logs) with 7-day retention and global exception handlers. |
+| `Snapshot.cs` | Headless SkiaSharp test runner (--snapshot) rendering 2x multi-background diagnostic PNGs. |
 
 ## Tuning the feel (Droplet.cs / LiquidRenderer.cs)
 
