@@ -1,0 +1,83 @@
+using System;
+using System.Threading;
+using System.Windows;
+using Microsoft.Win32;
+
+namespace IslandWin;
+
+public partial class App : Application
+{
+    Mutex _mutex;
+    System.Windows.Forms.NotifyIcon _tray;
+
+    void OnStartup(object sender, StartupEventArgs e)
+    {
+        _mutex = new Mutex(true, "IslandWin.SingleInstance", out bool first);
+        if (!first) { Shutdown(); return; }
+
+        new MainWindow().Show();
+        BuildTray();
+    }
+
+    void OnExit(object sender, ExitEventArgs e)
+    {
+        if (_tray != null) { _tray.Visible = false; _tray.Dispose(); }
+        _mutex?.Dispose();
+    }
+
+    void BuildTray()
+    {
+        var menu = new System.Windows.Forms.ContextMenuStrip();
+        var startup = new System.Windows.Forms.ToolStripMenuItem("Start with Windows")
+        {
+            CheckOnClick = true,
+            Checked = Autostart.IsOn
+        };
+        startup.CheckedChanged += (_, _) => Autostart.Set(startup.Checked);
+        menu.Items.Add(startup);
+        menu.Items.Add("Quit", null, (_, _) => Shutdown());
+
+        _tray = new System.Windows.Forms.NotifyIcon
+        {
+            Icon = MakeIcon(),
+            Text = "Island",
+            Visible = true,
+            ContextMenuStrip = menu
+        };
+    }
+
+    static System.Drawing.Icon MakeIcon()
+    {
+        using var bmp = new System.Drawing.Bitmap(32, 32);
+        using (var g = System.Drawing.Graphics.FromImage(bmp))
+        {
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            using var b = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(255, 142, 142, 147));
+            g.FillEllipse(b, 3, 10, 26, 12);
+        }
+        return System.Drawing.Icon.FromHandle(bmp.GetHicon());
+    }
+}
+
+static class Autostart
+{
+    const string KeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
+    const string Name = "IslandWin";
+
+    public static bool IsOn
+    {
+        get
+        {
+            using var k = Registry.CurrentUser.OpenSubKey(KeyPath);
+            return k?.GetValue(Name) != null;
+        }
+    }
+
+    public static void Set(bool on)
+    {
+        using var k = Registry.CurrentUser.OpenSubKey(KeyPath, true);
+        if (k == null) return;
+        if (on) k.SetValue(Name, "\"" + Environment.ProcessPath + "\"");
+        else k.DeleteValue(Name, false);
+    }
+}
